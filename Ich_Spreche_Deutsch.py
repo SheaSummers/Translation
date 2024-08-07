@@ -1,3 +1,4 @@
+#Importing needed packages
 import torch
 import torch.nn as nn
 import numpy as np
@@ -13,40 +14,47 @@ from torchtext.vocab import vocab
 from torchtext.datasets import Multi30k
 from torchtext.data.utils import get_tokenizer
 from torch.utils.data import DataLoader
-import bleu
 
+#Getting tokenizers for English and German
 english = get_tokenizer('spacy', language='en_core_web_sm')
 german = get_tokenizer('spacy', language='de_core_news_sm')
 
+#Loading the Multi30k Dataset for English to German translation
 train_data , validation_data, test_data = Multi30k(language_pair = ('en', 'de'))
 
-def build_vocab(data, tokenizer):
+
+#Funtion to build a vocabulary for English and German, minimum of 2 occurances needed in order to add
+def build_vocab(data, tokenizer, index):
   counter = Counter()
-  for (label, text) in data:
-    counter.update(tokenizer(text))
-  voc = vocab(counter, min_freq=3,  specials=['<bos>', '<eos>', '<unk>', '<pad>'])
+  for item in data:
+    counter.update(tokenizer(item[index]))
+  voc = vocab(counter, min_freq=2,  specials=['<bos>', '<eos>', '<unk>', '<pad>'])
   voc.set_default_index(voc['<unk>'])
   return voc
-ger_vocab = build_vocab(train_data, german)
-english_vocab = build_vocab(train_data, english)
 
+#Building the vocabularies
+ger_vocab = build_vocab(train_data, german, 1)
+english_vocab = build_vocab(train_data, english, 0)
 
+#Defining the Encoder Class
 class Encoder(nn.Module):
   def __init__(self, input_size, embedding_size, hidden_size, num_layers, drop):
     super(Encoder, self).__init__()
     self.hidden_size = hidden_size
     self.num_layers = num_layers
+    #A Dropout Layer is used to prevent overfitting of the model
     self.dropout = nn.Dropout(drop)
+    #A Embedding Layer used to convert the input tokens into dense vectors
     self.embedding = nn.Embedding(input_size, embedding_size)
+    # A Bidirectional LSTM Layer is used for the Recurrent Neural Network
     self.rnn = nn.LSTM(embedding_size, hidden_size, num_layers, dropout=drop, bidirectional=True)
+    #A Fully Connected Layer is used to combine the forward and backwards LSTM outputs
     self.fc = nn.Linear(hidden_size * 2, hidden_size)
+
 
   def forward(self, x):
     embedded = self.dropout(self.embedding(x))
     outputs, (hidden, cell) = self.rnn(embedded)
-
-
-
     hidden = torch.cat((hidden[-2, :, :], hidden[-1, :, :]), dim=1)
 
     hidden = self.fc(hidden)
@@ -61,6 +69,7 @@ class Encoder(nn.Module):
     return outputs, hidden, cell
 
 
+#Defining the Attention Class
 class Attention(nn.Module):
   def __init__(self, hidden_size, embedding_size):
     super(Attention, self).__init__()
@@ -83,7 +92,7 @@ class Attention(nn.Module):
     return torch.softmax(attn, dim=1)
 
 
-
+#Defining the Decoder Class
 class Decoder(nn.Module):
   def __init__(self, input_size, output_size, embedding_size, hidden_size, num_layers, attention, drop):
     super(Decoder, self).__init__()
@@ -111,6 +120,7 @@ class Decoder(nn.Module):
     predict = self.fc(outputs.squeeze(0))
     return predict, hidden, cell
 
+#Defining the Seq2Seq class which combines the Encoder and Decoder
 class Seq2Seq(nn.Module):
   def __init__(self, encoder, decoder, device):
     super(Seq2Seq, self).__init__()
@@ -136,6 +146,8 @@ class Seq2Seq(nn.Module):
       x = trg[y] if teacher_force else top
 
     return outputs
+
+#Setting the hyperparameters
 epochs = 10
 batch_size = 128
 learning_rate = 0.0008
@@ -144,28 +156,32 @@ load_model = False
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 input_size_enc = len(english_vocab)
 input_size_dec = len(ger_vocab)
-output_size = len(english_vocab)
+output_size = len(ger_vocab)
 enc_embedding = 300
 dec_embedding = 300
 hidden_size = 514
 num_layers = 2
 drop = 0.5
 
-
+#Instantiating the Encoder, Attention, and Decoder
 enc = Encoder(input_size_enc, enc_embedding, hidden_size, num_layers, drop)
 attn = Attention(hidden_size, dec_embedding)
-dec = Decoder(input_size_enc, output_size, dec_embedding, hidden_size, num_layers, attn, drop)
+dec = Decoder(input_size_dec, output_size, dec_embedding, hidden_size, num_layers, attn, drop)
 
+#Creating the Seq2Seq model
 model = Seq2Seq(enc, dec, device).to(device)
 
+#Using DataParallel if multiple GPus are available
 if torch.cuda.device_count() > 1:
     model = nn.DataParallel(model)
 
+#Setting the padding index
 pad_idx = english_vocab.get_stoi()['<pad>']
 
+#Defining the Loss function
 criterion = nn.CrossEntropyLoss(ignore_index=pad_idx)
 
-
+#Function to initialize weights
 def init_weights(mod):
   for name, param in mod.named_parameters():
     if 'weight' in name:
@@ -173,26 +189,38 @@ def init_weights(mod):
     else:
       nn.init.constant_(param.data, 0)
 
-
+#Applying the weights to the model
 model.apply(init_weights)
 
+#Defining the optimizer
 optimizer = optim.AdamW(model.parameters())
 
-
+#Definign the collate funtion for Dataloader
 def collate_fn(batch):
   src_batch, tgt_batch = [], []
   for src_sample, tgt_sample in batch:
-    src_batch.append(torch.tensor([english_vocab[token] for token in english(src_sample)]))
-    tgt_batch.append(torch.tensor([ger_vocab[token] for token in german(tgt_sample)]))
+    try:
+      src_batch.append(torch.tensor([english_vocab[token] for token in english(src_sample)]))
+      tgt_batch.append(torch.tensor([ger_vocab[token] for token in german(tgt_sample)]))
+    except UnicodeDecodeError:
+      continue
+
+    if not src_batch or not tgt_batch:
+      return None, None
 
   src_batch = nn.utils.rnn.pad_sequence(src_batch, padding_value=english_vocab['<pad>'])
   tgt_batch = nn.utils.rnn.pad_sequence(tgt_batch, padding_value=ger_vocab['<pad>'])
 
   return src_batch, tgt_batch
 
+#Instatiating the DataLoaders for the Training and Validation data
 train_loader = DataLoader(train_data, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
+validaiton_loader = DataLoader(validation_data, batch_size=int(batch_size/4), shuffle=True, collate_fn=collate_fn)
 
+#Creating a list to hold the loss for each translation
 loss_plot = []
+
+#Trainging Loop
 for epoch in range(epochs):
   model.train()
   accumulation_steps = 4
@@ -200,16 +228,16 @@ for epoch in range(epochs):
   for index, (input, target) in enumerate(train_loader):
     input = input.to(device)
     target = target.to(device)
-
     output = model(input, target)
     output = output[1:].reshape(-1, output.shape[2])
     target = target[1:].reshape(-1)
-
     loss = criterion(output, target)
 
     loss_plot.append(loss.item())
-    if index % 100 == 0:
+    if index % 50 == 0:
       print(f'Epoch: {epoch + 1}, Batch: {index}, Loss: {loss.item():.4f}')
+
+
 
     loss = loss/accumulation_steps
     loss.backward()
@@ -218,6 +246,37 @@ for epoch in range(epochs):
       optimizer.step()
       optimizer.zero_grad()
 
+#Validating the model after training
+val_loss = []
+model.eval()
+
+for index, (input, target) in enumerate(validaiton_loader):
+  input = input.to(device)
+  target = target.to(device)
+  output = model(input, target)
+  if index % 5 == 0:
+    input_words = [english_vocab.get_itos()[indx] for indx in input[:,0].cpu().detach().numpy()]
+    target_words = [ger_vocab.get_itos()[indx] for indx in target[:,0].cpu().detach().numpy()]
+
+    _, translated = torch.max(output, dim=2)
+
+    output_words = [ger_vocab.get_itos()[indx] for indx in translated[:,0].cpu().detach().numpy()]
+
+    print("Input: ", input_words)
+    print("Target: ", target_words)
+    print("Output: ", output_words)
+  output = output[1:].reshape(-1, output.shape[2])
+  target = target[1:].reshape(-1)
+  loss = criterion(output, target)
+  val_loss.append(loss.item())
+
+#Ploting the training loss
 plt.plot(loss_plot)
+plt.xlabel('Batch Number')
+plt.ylabel('Loss')
+plt.title('Change in Loss over Training Batches')
 plt.show()
 plt.close()
+
+
+print(f'Validation Loss: {np.mean(val_loss):.4f}')
