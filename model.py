@@ -33,7 +33,7 @@ class PositionalEncoding(nn.Module):
 
         positional_matrix= positional_matrix.unsqueeze(0)
 
-        self.register_buffer('positional_matrix', mat)
+        self.register_buffer('positional_matrix', positional_matrix)
 
     def forward(self, x):
         x = x + self.positional_matrix[:, :x.size(1), :].requires_grad_(False)
@@ -111,15 +111,17 @@ class MultiHeadAttention(nn.Module):
         K = self.k(key)
         V = self.v(value)
 
-        Q = Q.view(Q.shape[0], Q.shape[1], self.head, self.d_k).transpose(1, 2)
+        Q = Q.view(Q.shape[0], Q.shape[1], self.heads, self.d_k).transpose(1, 2)
 
-        K = K.view(K.shape[0], K.shape[1], self.head, self.d_k).transpose(1, 2)
+        K = K.view(K.shape[0], K.shape[1], self.heads, self.d_k).transpose(1, 2)
 
-        V = V.view(V.shape[0], V.shape[1], self.head, self.d_k).transpose(1, 2)
+        V = V.view(V.shape[0], V.shape[1], self.heads, self.d_k).transpose(1, 2)
 
         x, self.scores = attention(Q, K, V, mask=mask)
 
-        x = x.transpose(1, 2).contiguous().view(x.shape[0], x.shape[1], self.d_model)
+        x = x.transpose(1, 2)
+
+        x = x.contiguous().view(x.shape[0], x.shape[1], self.d_model)
 
         return self.out(x)
 
@@ -138,7 +140,7 @@ class SkipConnection(nn.Module):
 
 class EncoderBlock(nn.Module):
     def __init__(self, attention, feed_forward, dropout):
-        super(Encoder, self).__init__()
+        super(EncoderBlock, self).__init__()
         self.attention = attention
         self.feed_forward = feed_forward
         self.skip = nn.ModuleList([SkipConnection(dropout), SkipConnection(dropout)])
@@ -186,7 +188,7 @@ class Decoder(nn.Module):
 
     def forward(self, x, enc_out, enc_mask, dec_mask):
         for layer in self.layers:
-            x = layer(x, nc_out, enc_mask, dec_mask)
+            x = layer(x, enc_out, enc_mask, dec_mask)
         return self.norm(x)
 
 
@@ -199,7 +201,7 @@ class Projection(nn.Module):
 
     def forward(self, x):
         x = self.project(x)
-        return torch.softmax(x)
+        return x
 
 class Transformer(nn.Module):
     def __init__(self, encoder, decoder, source, target, src_pos, trg_pos, project):
@@ -215,15 +217,20 @@ class Transformer(nn.Module):
     def encode(self, x, mask):
         x = self.source(x)
         x = self.src_pos(x)
-        return self.encode(x, mask)
+        return self.encoder(x, mask)
 
     def decode(self, x, enc_out, src_mask, trg_mask):
         x = self.target(x)
         x = self.trg_pos(x)
-        return self.decode(x, enc_out, src_mask, trg_mask)
+        return self.decoder(x, enc_out, src_mask, trg_mask)
 
     def projection(self, x):
         return self.project(x)
+
+    def forward(self, src, tgt, src_mask, tgt_mask):
+        enc_out = self.encode(src, src_mask)
+        dec_out = self.decode(tgt, enc_out, src_mask, tgt_mask)
+        return self.projection(dec_out)
 
 def roll_out(src_vocab, trg_vocab, src_seq, trg_seq, layers, d_model = 512, heads = 8, dropout = 0.1, d_ff = 2048):
     src_embed = nn.Embedding(src_vocab, d_model)
@@ -259,17 +266,6 @@ def roll_out(src_vocab, trg_vocab, src_seq, trg_seq, layers, d_model = 512, head
             nn.init.xavier_uniform_(p)
 
     return transformer
-
-
-
-
-
-
-
-
-
-
-
 
 
 
