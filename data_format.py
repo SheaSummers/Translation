@@ -2,7 +2,6 @@ import torch
 import torchtext;torchtext.disable_torchtext_deprecation_warning()
 from torchtext.data.utils import get_tokenizer
 from torchtext.vocab import build_vocab_from_iterator
-from torchtext.datasets import Multi30k
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import DataLoader
 
@@ -47,13 +46,9 @@ def generate_batch(data_batch):
 
 
 
-def get_loaders(train_iter, validation_iter, src_vocab, tgt_vocab, src_tokenizer, tgt_tokenizer, batch_size):
+def get_loaders(iter, src_vocab, tgt_vocab, src_tokenizer, tgt_tokenizer, batch_size):
 
-    train_data = [data_process(data_sample, src_vocab, tgt_vocab, src_tokenizer, tgt_tokenizer) for data_sample in train_iter]
-    train_dataloader = DataLoader(train_data, batch_size=batch_size, shuffle=True, collate_fn=generate_batch)
+    data = [data_process(data_sample, src_vocab, tgt_vocab, src_tokenizer, tgt_tokenizer) for data_sample in iter]
+    dataloader = DataLoader(data, batch_size=batch_size, shuffle=True, collate_fn=generate_batch)
 
-    valid_iter = Multi30k(split='valid', language_pair=('en', 'de'))
-    valid_data = [data_process(data_sample, src_vocab, tgt_vocab, src_tokenizer, tgt_tokenizer) for data_sample in valid_iter]
-    valid_dataloader = DataLoader(valid_data, batch_size=batch_size, shuffle=False, collate_fn=generate_batch)
-
-    return train_dataloader, valid_dataloader
+    return dataloader
