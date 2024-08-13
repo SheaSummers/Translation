@@ -26,7 +26,8 @@ batch_size = 128
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f"Using device: {device}")
 
-train_dataloader, validation_dataloader = data_format.get_loaders(train_data, validation_data, src_vocab, tgt_vocab, english_tokenizer, german_tokenizer, batch_size)
+train_dataloader = data_format.get_loaders(validation_data, src_vocab, tgt_vocab, english_tokenizer, german_tokenizer, batch_size)
+validation_dataloader = data_format.get_loaders(validation_data, src_vocab, tgt_vocab, english_tokenizer, german_tokenizer, batch_size)
 
 src_vocab_size = len(src_vocab)
 tgt_vocab_size = len(tgt_vocab)
