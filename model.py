@@ -13,7 +13,9 @@ class Embedding (nn.Module):
         self.vocab = vocab
         self.embedding = nn.Embedding(vocab, d_model)
     def forward(self, x):
-        return self.embedding(x) * np.sqrt(self.d_model)
+
+        embedded = self.embedding(x) * np.sqrt(self.d_model)
+        return embedded
 
 
 class PositionalEncoding(nn.Module):
@@ -22,6 +24,7 @@ class PositionalEncoding(nn.Module):
         self.d_model = d_model
         self.max_len = max_len
         self.dropout = nn.Dropout(dropout)
+
 
         positional_matrix = torch.zeros(max_len, d_model)
 
@@ -36,6 +39,7 @@ class PositionalEncoding(nn.Module):
         self.register_buffer('positional_matrix', positional_matrix)
 
     def forward(self, x):
+
         x = x + self.positional_matrix[:, :x.size(1), :].requires_grad_(False)
 
         return self.dropout(x)
@@ -79,8 +83,8 @@ def attention(query, key, value, mask=None, dropout=None):
 
     scores = torch.matmul(query, key.transpose(-2, -1)) / math.sqrt(d_k)
 
-    if mask is not None:
-        scores = scores.masked_fill(mask == 0, -1e9)
+    #if mask is not None:
+    #    scores = scores.masked_fill(mask == 0, -1e9)
 
     scores = torch.softmax(scores, dim=-1)
 
@@ -107,6 +111,8 @@ class MultiHeadAttention(nn.Module):
         self.out = nn.Linear(d_model, d_model)
 
     def forward(self, query, key, value, mask=None):
+
+
         Q = self.q(query)
         K = self.k(key)
         V = self.v(value)
@@ -116,6 +122,8 @@ class MultiHeadAttention(nn.Module):
         K = K.view(K.shape[0], K.shape[1], self.heads, self.d_k).transpose(1, 2)
 
         V = V.view(V.shape[0], V.shape[1], self.heads, self.d_k).transpose(1, 2)
+
+
 
         x, self.scores = attention(Q, K, V, mask=mask)
 
@@ -149,6 +157,7 @@ class EncoderBlock(nn.Module):
     def forward(self, x, mask):
         x = self.skip[0](x, lambda x: self.attention(x, x, x, mask=mask))
         x = self.skip[1](x, lambda x: self.feed_forward(x))
+
 
         return x
 
@@ -204,40 +213,44 @@ class Projection(nn.Module):
         return x
 
 class Transformer(nn.Module):
-    def __init__(self, encoder, decoder, source, target, src_pos, trg_pos, project):
+    def __init__(self, encoder, decoder, source_embedding, target_embedding, src_pos, tgt_pos, project):
         super(Transformer, self).__init__()
         self.encoder = encoder
         self.decoder = decoder
-        self.source = source
-        self.target = target
+        self.source_embedding = source_embedding
+        self.target_embedding = target_embedding
         self.src_pos = src_pos
-        self.trg_pos = trg_pos
+        self.tgt_pos = tgt_pos
         self.project = project
 
     def encode(self, x, mask):
-        x = self.source(x)
+        x = self.source_embedding(x)
+
         x = self.src_pos(x)
         return self.encoder(x, mask)
 
-    def decode(self, x, enc_out, src_mask, trg_mask):
-        x = self.target(x)
-        x = self.trg_pos(x)
-        return self.decoder(x, enc_out, src_mask, trg_mask)
+    def decode(self, x, enc_out, src_mask, tgt_mask):
+        x = self.target_embedding(x)
+        x = self.tgt_pos(x)
+        return self.decoder(x, enc_out, src_mask, tgt_mask)
 
     def projection(self, x):
         return self.project(x)
 
     def forward(self, src, tgt, src_mask, tgt_mask):
+
+
         enc_out = self.encode(src, src_mask)
+
         dec_out = self.decode(tgt, enc_out, src_mask, tgt_mask)
         return self.projection(dec_out)
 
-def roll_out(src_vocab, trg_vocab, src_seq, trg_seq, layers, d_model = 512, heads = 8, dropout = 0.1, d_ff = 2048):
+def roll_out(src_vocab, trg_vocab, max_seq, layers, d_model = 512, heads = 8, dropout = 0.1, d_ff = 2048):
     src_embed = nn.Embedding(src_vocab, d_model)
     trg_embed = nn.Embedding(trg_vocab, d_model)
 
-    src_pos = PositionalEncoding(d_model, max_len = src_seq, dropout = dropout)
-    trg_pos = PositionalEncoding(d_model, max_len = trg_seq, dropout = dropout)
+    src_pos = PositionalEncoding(d_model, max_len = max_seq, dropout = dropout)
+    trg_pos = PositionalEncoding(d_model, max_len = max_seq, dropout = dropout)
 
     encoders = []
     for i in range(layers):
@@ -266,30 +279,5 @@ def roll_out(src_vocab, trg_vocab, src_seq, trg_seq, layers, d_model = 512, head
             nn.init.xavier_uniform_(p)
 
     return transformer
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
