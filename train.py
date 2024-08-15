@@ -1,12 +1,13 @@
 import torch
-import Test
-import data_format
+import model
+import data_format_xl
 import torch.nn as nn
 import numpy as np
 import math
 import pandas as pd
 import openpyxl
 import torch.optim as optim
+import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader
 from torchtext.data.utils import get_tokenizer
 from torch.optim.lr_scheduler import MultiStepLR
@@ -25,14 +26,14 @@ src_tokenizer = get_tokenizer('spacy', language='de_core_news_sm')
 
 
 
-src_vocab = data_format.build_vocabulary(test_data , src_tokenizer, lang= 'de')
-tgt_vocab = data_format.build_vocabulary(test_data, tgt_tokenizer, lang= 'en')
+src_vocab = data_format_xl.build_vocabulary(test_data , src_tokenizer, lang= 'de')
+tgt_vocab = data_format_xl.build_vocabulary(test_data, tgt_tokenizer, lang= 'en')
 
 
 
 train_data = data_format.TranslationDataset(train_data, 'de', 'en', src_tokenizer, tgt_tokenizer, src_vocab, tgt_vocab )
 validation_data = data_format.TranslationDataset(validation_data, 'de', 'en', src_tokenizer, tgt_tokenizer, src_vocab, tgt_vocab )
-test_data = data_format.TranslationDataset(test_data, 'de', 'en', src_tokenizer, tgt_tokenizer, src_vocab, tgt_vocab )
+test_data = data_format_xl.TranslationDataset(test_data, 'de', 'en', src_tokenizer, tgt_tokenizer, src_vocab, tgt_vocab )
 
 
 
@@ -41,18 +42,24 @@ batch_size = 64
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f"Using device: {device}")
 
+
+src_vocab_size = len(src_vocab)
+tgt_vocab_size = len(tgt_vocab)
+src_seq_length = max([len(sample[src_lang].split(' ')) for _, sample in test_data.iterrows()])
+tgt_seq_length = max([len(sample[tgt_lang].split(' ')) for _, sample in test_data.iterrows()])
+max_length = max(src_seq_length, tgt_seq_length)
+
+print(max_length)
+
 train_dataloader = data_format.get_loaders(train_data, src_vocab, tgt_vocab, src_tokenizer, tgt_tokenizer, batch_size)
 
 validation_dataloader = data_format.get_loaders(validation_data, src_vocab, tgt_vocab, src_tokenizer, tgt_tokenizer, batch_size)
 
-test_dataloader = data_format.get_loader(test_data, src_vocab, tgt_vocab, src_tokenizer, tgt_tokenizer, batch_size)
+test_dataloader = data_format_xl.get_loader(test_data, src_vocab, tgt_vocab, src_tokenizer, tgt_tokenizer, batch_size, src_lang, tgt_lang, max_length)
 
-src_vocab_size = len(src_vocab)
-tgt_vocab_size = len(tgt_vocab)
-src_seq_length = max(len(sample[0]) for sample in train_data)
-tgt_seq_length = max(len(sample[1]) for sample in train_data)
 
-model = Test.roll_out(src_vocab_size, tgt_vocab_size, src_seq_length, tgt_seq_length, layers=6)
+
+model = model.roll_out(src_vocab_size, tgt_vocab_size, max_length, layers=6)
 
 model = model.to(device)
 
@@ -75,20 +82,19 @@ def train(model, dataloader, optimizer, criterion, clip=1.0):
     index = 0
 
     for src, tgt in dataloader:
-        src = src.transpose(0, 1).to(device)  # Transpose to match the model's expected input shape
-        tgt = tgt.transpose(0, 1).to(device)
-        tgt_input = tgt[:, :-1]
-        tgt_output = tgt[:, 1:]
+        src = src.to(device)  # Transpose to match the model's expected input shape
+        tgt = tgt.to(device)
+        print(index)
 
 
         src_mask = (src != 0).unsqueeze(1).unsqueeze(2).to(device)
-        tgt_mask = (tgt_input != 0).unsqueeze(1).unsqueeze(3)
+        tgt_mask = (tgt_input != 0).unsqueeze(1).unsqueeze(3).repeat(1, 1, 1, max_length).to(device)
         tgt_mask = tgt_mask & torch.tril(torch.ones(tgt_mask.shape[2], tgt_mask.shape[3])).bool().to(device)
 
         optimizer.zero_grad()
 
         output = model(src, tgt_input, src_mask, tgt_mask)
-        loss = criterion(output.contiguous().view(-1, output.shape[-1]), tgt_output.contiguous().view(-1))
+        loss = criterion(output.contiguous().view(-1, output.shape[-1]), tgt.contiguous().view(-1))
 
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), clip)
@@ -117,17 +123,15 @@ def validate(model, dataloader, criterion):
     total_loss = 0
     with torch.no_grad():
         for src, tgt in dataloader:
-            src = src.transpose(0, 1).to(device)
-            tgt = tgt.transpose(0, 1).to(device)
-            tgt_input = tgt[:, :-1]
-            tgt_output = tgt[:, 1:]
+            src = src.to(device)
+            tgt = tgt.to(device)
+
 
             src_mask = (src != 0).unsqueeze(1).unsqueeze(2).to(device)
-            tgt_mask = (tgt_input != 0).unsqueeze(1).unsqueeze(3)
-            tgt_mask = tgt_mask & torch.tril(torch.ones(tgt_mask.shape[2], tgt_mask.shape[3])).bool().to(device)
+            tgt_mask = (tgt != 0).unsqueeze(1).unsqueeze(3).repeat(1, 1, 1, max_length).to(device)
 
             output = model(src, tgt_input, src_mask, tgt_mask)
-            loss = criterion(output.contiguous().view(-1, output.shape[-1]), tgt_output.contiguous().view(-1))
+            loss = criterion(output.contiguous().view(-1, output.shape[-1]), tgt.contiguous().view(-1))
             total_loss += loss.item()
 
     return total_loss / len(dataloader)
@@ -138,7 +142,7 @@ num_epochs = 10
 training_losses = []
 validation_losses = []
 for epoch in range(num_epochs):
-    train_loss = train(model, train_dataloader, optimizer, criterion)
+    train_loss = train(model, test_dataloader, optimizer, criterion)
     val_loss = validate(model, validation_dataloader, criterion)
     training_losses.append(train_loss)
     validation_losses.append(val_loss)
@@ -146,7 +150,7 @@ for epoch in range(num_epochs):
     print(f"Epoch: {epoch + 1}, Train loss: {train_loss:.4f}")
     print(f"Epoch: {epoch + 1}, Validation loss: {val_loss:.4f}")
 
-torch.save(model.state_dict(), 'transformer_model.pth')
+
 
 plt.plot(training_losses)
 plt.xlabel('Epoch')
@@ -154,6 +158,4 @@ plt.ylabel('Loss')
 plt.title('Change in Loss over Epochs')
 plt.show()
 plt.close()
-
-
 
